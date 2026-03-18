@@ -34,6 +34,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(routes::health))
+        .route("/api/browse", post(routes::browse_directory))
         .route("/api/scan", post(routes::scan_directory))
         .route("/api/files", get(routes::list_files))
         .route("/api/files/{id}", get(routes::get_file))

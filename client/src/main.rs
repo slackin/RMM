@@ -64,6 +64,14 @@ struct MediaApp {
     enc_audio_codec: usize,
     enc_resolution: usize,
     enc_crf: u8,
+
+    // Folder browser
+    show_browser: bool,
+    browser_path: String,
+    browser_entries: Vec<DirEntry>,
+    browser_loading: bool,
+    browser_error: String,
+    browser_result: Option<Arc<Mutex<Option<Result<Vec<DirEntry>, String>>>>>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -77,7 +85,7 @@ impl MediaApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::setup_custom_style(&cc.egui_ctx);
 
-        let server_url = "http://localhost:9090".to_string();
+        let server_url = "http://10.42.1.1:9090".to_string();
         let api = Arc::new(ApiClient::new(&server_url));
         Self {
             api,
@@ -91,6 +99,13 @@ impl MediaApp {
             enc_audio_codec: 0,
             enc_resolution: 4, // Original
             enc_crf: 23,
+
+            show_browser: false,
+            browser_path: "/".to_string(),
+            browser_entries: Vec::new(),
+            browser_loading: false,
+            browser_error: String::new(),
+            browser_result: None,
         }
     }
 
@@ -205,6 +220,50 @@ impl MediaApp {
             }
             ctx.request_repaint();
         });
+    }
+
+    fn browse_path(&mut self, ctx: &egui::Context) {
+        let api = Arc::clone(&self.api);
+        let path = self.browser_path.clone();
+        let ctx = ctx.clone();
+        self.browser_loading = true;
+        self.browser_error.clear();
+
+        // We store results directly via a shared Arc<Mutex<..>> for the browser
+        let entries_out: Arc<Mutex<Option<Result<Vec<DirEntry>, String>>>> =
+            Arc::new(Mutex::new(None));
+        let entries_out2 = Arc::clone(&entries_out);
+
+        self.runtime.spawn(async move {
+            let result = api.browse_directory(&path).await;
+            *entries_out2.lock().unwrap() = Some(result);
+            ctx.request_repaint();
+        });
+
+        // We'll poll results in the UI via a stored handle
+        self.browser_result = Some(entries_out);
+    }
+
+    fn poll_browser_result(&mut self) {
+        if let Some(ref result_handle) = self.browser_result {
+            let mut guard = result_handle.lock().unwrap();
+            if let Some(result) = guard.take() {
+                self.browser_loading = false;
+                match result {
+                    Ok(entries) => {
+                        self.browser_entries = entries;
+                        self.browser_error.clear();
+                    }
+                    Err(e) => {
+                        self.browser_entries.clear();
+                        self.browser_error = e;
+                    }
+                }
+                drop(guard);
+                self.browser_result = None;
+                return;
+            }
+        }
     }
 
     fn scan_directory(&self, ctx: &egui::Context) {
@@ -368,6 +427,10 @@ impl eframe::App for MediaApp {
                 Tab::Encode => self.show_encode(ui, ctx),
                 Tab::Jobs => self.show_jobs(ui),
             });
+
+        // ── Folder browser window (rendered on top) ─────────────────────
+        self.poll_browser_result();
+        self.show_browser_window(ctx);
     }
 }
 
@@ -467,7 +530,16 @@ impl MediaApp {
                 {
                     self.scan_directory(ctx);
                 }
-                if styled_button(ui, "🔄  Refresh", BG_ELEVATED, false).clicked() {
+                if styled_button(ui, "�  Browse", BG_ELEVATED, false).clicked() {
+                    self.show_browser = true;
+                    if self.scan_path.is_empty() {
+                        self.browser_path = "/".to_string();
+                    } else {
+                        self.browser_path = self.scan_path.clone();
+                    }
+                    self.browse_path(ctx);
+                }
+                if styled_button(ui, "�🔄  Refresh", BG_ELEVATED, false).clicked() {
                     self.refresh_files(ctx);
                 }
             });
@@ -825,6 +897,141 @@ impl MediaApp {
                 ui.add_space(6.0);
             }
         });
+    }
+
+    fn show_browser_window(&mut self, ctx: &egui::Context) {
+        if !self.show_browser {
+            return;
+        }
+
+        let mut open = self.show_browser;
+        let mut selected_path: Option<String> = None;
+        let mut navigate_to: Option<String> = None;
+
+        egui::Window::new("📂  Browse Server Directories")
+            .open(&mut open)
+            .default_size([500.0, 450.0])
+            .resizable(true)
+            .collapsible(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(BG_PANEL)
+                    .rounding(egui::Rounding::same(10.0))
+                    .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
+                    .inner_margin(egui::Margin::same(16.0)),
+            )
+            .show(ctx, |ui| {
+                // Current path display with navigation
+                ui.horizontal(|ui| {
+                    // Up button
+                    let can_go_up = self.browser_path != "/";
+                    ui.add_enabled_ui(can_go_up, |ui| {
+                        if styled_button(ui, "⬆  Up", BG_ELEVATED, false).clicked() {
+                            let parent = std::path::Path::new(&self.browser_path)
+                                .parent()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "/".to_string());
+                            navigate_to = Some(parent);
+                        }
+                    });
+
+                    // Path breadcrumb
+                    ui.label(
+                        egui::RichText::new("Path:")
+                            .size(12.0)
+                            .color(TEXT_DIM),
+                    );
+                    ui.label(
+                        egui::RichText::new(&self.browser_path)
+                            .size(13.0)
+                            .color(TEXT_PRIMARY)
+                            .strong(),
+                    );
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                if self.browser_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Loading…")
+                                .size(13.0)
+                                .color(TEXT_SECONDARY),
+                        );
+                    });
+                } else if !self.browser_error.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.browser_error)
+                            .size(13.0)
+                            .color(ERROR),
+                    );
+                } else if self.browser_entries.is_empty() {
+                    ui.label(
+                        egui::RichText::new("Empty directory")
+                            .size(13.0)
+                            .color(TEXT_DIM),
+                    );
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            let entries = self.browser_entries.clone();
+                            for entry in &entries {
+                                let icon = if entry.is_dir { "📁" } else { "📄" };
+                                let text_color = if entry.is_dir {
+                                    TEXT_PRIMARY
+                                } else {
+                                    TEXT_DIM
+                                };
+
+                                let row = ui.horizontal(|ui| {
+                                    let label = egui::Label::new(
+                                        egui::RichText::new(format!("{icon}  {}", entry.name))
+                                            .size(13.0)
+                                            .color(text_color),
+                                    )
+                                    .sense(egui::Sense::click());
+
+                                    let resp = ui.add(label);
+                                    if resp.double_clicked() && entry.is_dir {
+                                        navigate_to = Some(entry.path.clone());
+                                    }
+                                    resp
+                                });
+                                let _ = row;
+                            }
+                        });
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                // Action buttons
+                ui.horizontal(|ui| {
+                    if styled_button(ui, "✅  Select This Directory", ACCENT, false).clicked() {
+                        selected_path = Some(self.browser_path.clone());
+                    }
+                    if styled_button(ui, "Cancel", BG_ELEVATED, false).clicked() {
+                        self.show_browser = false;
+                    }
+                });
+            });
+
+        self.show_browser = open;
+
+        // Apply navigation after the window is done rendering
+        if let Some(path) = navigate_to {
+            self.browser_path = path;
+            self.browse_path(ctx);
+        }
+        if let Some(path) = selected_path {
+            self.scan_path = path;
+            self.show_browser = false;
+        }
     }
 }
 

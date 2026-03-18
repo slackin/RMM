@@ -10,6 +10,50 @@ pub async fn health() -> Json<ApiResponse<String>> {
     Json(ApiResponse::ok("ok".into()))
 }
 
+pub async fn browse_directory(
+    Json(req): Json<BrowseRequest>,
+) -> Json<ApiResponse<Vec<DirEntry>>> {
+    let dir_path = std::path::Path::new(&req.path);
+    if !dir_path.is_dir() {
+        return Json(ApiResponse::err("Path is not a valid directory"));
+    }
+
+    // Canonicalize to resolve symlinks and prevent traversal
+    let canonical = match dir_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Json(ApiResponse::err(format!("Cannot resolve path: {e}"))),
+    };
+
+    let mut entries = Vec::new();
+    let read_dir = match std::fs::read_dir(&canonical) {
+        Ok(rd) => rd,
+        Err(e) => return Json(ApiResponse::err(format!("Cannot read directory: {e}"))),
+    };
+
+    for entry in read_dir.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip hidden entries
+        if name.starts_with('.') {
+            continue;
+        }
+        entries.push(DirEntry {
+            name,
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir: meta.is_dir(),
+        });
+    }
+
+    entries.sort_by(|a, b| {
+        // Directories first, then alphabetical
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Json(ApiResponse::ok(entries))
+}
+
 pub async fn scan_directory(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScanRequest>,

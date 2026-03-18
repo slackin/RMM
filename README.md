@@ -75,6 +75,7 @@ The server creates `media_manager.db` (SQLite) in the current directory.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
+| POST | `/api/browse` | List directory contents (folders/files) |
 | POST | `/api/scan` | Scan directory for media files |
 | GET | `/api/files` | List all known media files |
 | GET | `/api/files/{id}` | Get single file details |
@@ -82,3 +83,12 @@ The server creates `media_manager.db` (SQLite) in the current directory.
 | POST | `/api/encode` | Submit an encoding job |
 | GET | `/api/jobs` | List all encoding jobs |
 | GET | `/api/jobs/{id}` | Get single job status |
+
+## TODO
+
+- [ ] **Batch encoding** — Select multiple files and queue encoding jobs in bulk
+- [ ] **Select all for codec/resolution/audio** — Apply codec, resolution, and audio settings across all selected files at once
+- [ ] **Verbose FFmpeg error reporting** — Surface detailed error messages when FFmpeg fails (stderr capture, exit codes, common failure explanations)
+- [ ] **Speed statistics on Jobs page** — Show encoding speed (e.g. fps, x realtime), elapsed time, and ETA on active jobs
+- [ ] **GPU encoding support** — Detect available GPU hardware (NVENC, VAAPI, QSV), show GPU usage stats, and allow GPU-accelerated encoding
+- [ ] **Auto-rename using movie database** — Look up movie/show names from an internet database (e.g. TMDb/IMDb) and auto-rename files with clean, standardized names

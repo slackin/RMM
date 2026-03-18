@@ -31,6 +31,26 @@ impl ApiClient {
         })
     }
 
+    pub async fn browse_directory(&self, path: &str) -> Result<Vec<DirEntry>, String> {
+        let req = BrowseRequest {
+            path: path.to_string(),
+        };
+        let resp: ApiResponse<Vec<DirEntry>> = self
+            .client
+            .post(format!("{}/api/browse", self.base_url))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {e}"))?;
+
+        resp.data.ok_or_else(|| {
+            resp.error.unwrap_or_else(|| "Unknown error".into())
+        })
+    }
+
     pub async fn scan_directory(&self, dir: &str) -> Result<Vec<MediaFile>, String> {
         let req = ScanRequest {
             directory: dir.to_string(),
